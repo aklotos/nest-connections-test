@@ -19,14 +19,14 @@ You must provide a path to valid json config file to run test:
 Provided config must have next structure:
 
     {
-        "adminToken": "...",
+        "masterToken": "...",
         "userTokens" : ["...", "...", ..., "..."],
         "firebaseUrl": "..."
     }
     
 ___Where:___ 
 
-* <code>adminToken</code> - firebase access token that used to update device property (must have write access to property) 
+* <code>masterToken</code> - firebase access token that used to update device property (must have write access to property) 
 * <code>userTokens</code> - array of firebase access tokens connected to the same firebase model as <code>adminToken</code>
 * <code>firebaseUrl</code> - url to firebase (for example <code>wss://developer-api.nest.com</code>)
 

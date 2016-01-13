@@ -64,7 +64,7 @@ async.auto({
 
         console.log('\n------ START TEST ------');
         interval = setInterval(function () {
-            updateAndCheck(config.adminToken);
+            updateAndCheck(config.masterToken);
         }, testInterval * 1000);
 
         cb();
