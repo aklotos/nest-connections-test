@@ -20,6 +20,7 @@ function NestSyncWorker(accessToken) {
 
     this.firebase = null;
     this.context = null;
+    this.childs = {};
 }
 
 NestSyncWorker.prototype = Object.create(EventEmitter.prototype);
@@ -45,17 +46,23 @@ NestSyncWorker.prototype.start = function (callback) {
             callback(error);
         } else {
             // add disconnect event
-            that.firebase.onAuth(function (onAuthData) {
-                if (!onAuthData) {
-                    console.log('Nest firebase client [%s] disconnected', that.accessToken);
-                    that.emit('stop');
-                }
-            });
+            that.firebase.onAuth(that._onAuthComplete, that);
 
             // subscribe
             that._bootstrapSubscriptions(callback);
         }
     });
+}
+
+NestSyncWorker.prototype._onAuthComplete = function (onAuthData) {
+    if (!onAuthData) {
+        console.log('Nest firebase client [%s] disconnected', this.accessToken);
+        this.emit('stop');
+    }
+}
+
+NestSyncWorker.prototype._saveChild = function(ref) {
+    this.childs[ref.toString()] = ref;
 }
 
 NestSyncWorker.prototype._bootstrapSubscriptions = function (callback) {
@@ -74,13 +81,13 @@ NestSyncWorker.prototype._bootstrapSubscriptions = function (callback) {
     });
 }
 
-
 NestSyncWorker.prototype._subscribeEntities = function (path, idProp, updateEntity) {
     var ref = this.firebase.child(path);
     var that = this;
 
     console.log('Listen to new/removed children [topic = %s, client = %s]', path, this.accessToken);
 
+    that._saveChild(ref);
     ref.on('child_added', function (snapshot) {
         var childAdded = snapshot.val();
         if (!childAdded) {
@@ -92,6 +99,7 @@ NestSyncWorker.prototype._subscribeEntities = function (path, idProp, updateEnti
         that._subscribeEntity(newPath, updateEntity);
     });
 
+    that._saveChild(ref);
     ref.on('child_removed', function (snapshot) {
         var childRemoved = snapshot.val();
         if (!childRemoved) {
@@ -108,6 +116,7 @@ NestSyncWorker.prototype._subscribeEntity = function (path, updateEntity) {
     var that = this;
     var ref = this.firebase.child(path);
 
+    that._saveChild(ref);
     ref.on('value', function (snapshot) {
         var nestStateUpdate = snapshot.val();
         if (!nestStateUpdate) {
@@ -122,7 +131,12 @@ NestSyncWorker.prototype._subscribeEntity = function (path, updateEntity) {
 NestSyncWorker.prototype.stop = function (callback) {
     console.log('Stop nest firebase client [%s]', this.accessToken);
 
+    _.values(this.childs).forEach(function (ref) {
+        console.log(ref.toString());
+        ref.off();
+    });
     this.context.interrupt();
+    this.firebase.offAuth(this._onAuthComplete, this);
     this.firebase.unauth();
     this.firebase = null;
     async.nextTick(callback);

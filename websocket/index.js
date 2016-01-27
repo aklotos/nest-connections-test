@@ -39,15 +39,25 @@ async.auto({
         async.each(config.userTokens, function (token, callback) {
             var worker = new NestSyncWorker(token);
             worker.on('stop', function () {
+                _.remove(workers, function(w) { return w.accessToken === token; });
                 worker.stop(function () {
-                    worker.start(function () {
+                    worker.start(function (err) {
+                        if (err) {
+                            console.err(err);
+                        } else {
+                            workers.push(worker);
+                        }
                     });
                 });
             });
 
-            worker.start(function () {
-                workers.push(worker);
-                callback();
+            worker.start(function (err) {
+                if (err) {
+                    console.err(err);
+                } else {
+                    workers.push(worker);
+                }
+                callback(err);
             });
         }, function (err) {
             cb(err);
@@ -75,7 +85,6 @@ async.auto({
         shutdown();
     }
 });
-
 
 function updateAndCheck(token) {
     async.auto({
@@ -118,38 +127,50 @@ function checkReceived(results) {
 }
 
 function updateThermostat(token, cb) {
-    firebaseRef.authWithCustomToken(token, function (err, authData) {
-        if (err || !authData) {
-            cb(new Error('Failed to auth to Nest'));
+    var auth = firebaseRef.getAuth();
+    if (auth) {
+        updateOnceValue(cb);
+    } else {
+        firebaseRef.authWithCustomToken(token, function (err, authData) {
+            if (err || !authData) {
+                cb(new Error('Failed to auth to Nest'));
+            } else {
+                console.log('Authenticated master token: %s', token);
+                updateOnceValue(cb);
+            }
+        });
+    }
+}
+
+function updateOnceValue(cb) {
+    firebaseRef.once('value', function (snapshot) {
+        var metadata = snapshot.val();
+        if (!metadata) {
+            cb(new Error('No data for testing.'));
         } else {
-            firebaseRef.once('value', function (snapshot) {
-                var metadata = snapshot.val();
-                if (!metadata) {
-                    cb(new Error('No data for testing.'));
-                } else {
-                    var thermostats = _.get(metadata, 'devices.thermostats');
-                    if (_.isEmpty(thermostats)) {
-                        cb(new Error('No thermostat to update'));
-                        return;
-                    }
+            var thermostats = _.get(metadata, 'devices.thermostats');
+            if (_.isEmpty(thermostats)) {
+                cb(new Error('No thermostat to update'));
+                return;
+            }
 
-                    var tKey = _.sample(_.keys(thermostats));
-                    var tTempF = thermostats[tKey]['target_temperature_f'];
-                    if (++tTempF == 90) {
-                        tTempF = 50;
-                    }
-                    thermostats[tKey]['target_temperature_f'] = tTempF;
-                    var updateRef = '/devices/thermostats/' + tKey;
+            var tKey = _.sample(_.keys(thermostats));
+            var tTempF = thermostats[tKey]['target_temperature_f'];
+            if (++tTempF == 90) {
+                tTempF = 50;
+            }
+            thermostats[tKey]['target_temperature_f'] = tTempF;
+            var updateRef = '/devices/thermostats/' + tKey;
 
-                    console.log('%s: Sending update [device = %s, target_temperature_f = %d]', new Date().toISOString(), tKey, tTempF);
+            console.log('%s: Sending update [device = %s, target_temperature_f = %d]', new Date().toISOString(), tKey, tTempF);
 
-                    firebaseRef.child(updateRef).set({'target_temperature_f': tTempF});
-                    cb(null, thermostats[tKey]);
-                }
-            });
+            firebaseRef.child(updateRef).set({'target_temperature_f': tTempF});
+            cb(null, thermostats[tKey]);
         }
     });
 }
+
+
 
 function receiveUpdate(worker, update, property, callback) {
     var retryOpts = {times: nconf.get('checkTimes'), interval: nconf.get('checkInterval')};
