@@ -20,15 +20,13 @@ Provided config must have next structure:
 
     {
         "masterToken": "...",
-        "userTokens" : ["...", "...", ..., "..."],
-        "firebaseUrl": "..."
+        "userTokens" : ["...", "...", ..., "..."]
     }
     
 ___Where:___ 
 
 * <code>masterToken</code> - firebase access token that used to update device property (must have write access to property) 
 * <code>userTokens</code> - array of firebase access tokens connected to the same firebase model as <code>adminToken</code>
-* <code>firebaseUrl</code> - url to firebase (for example <code>wss://developer-api.nest.com</code>)
 
 You can also use some additional arguments:
 
@@ -37,6 +35,11 @@ You can also use some additional arguments:
     <th>Argument name</th>
     <th>Description</th>
     <th>Default value</th>
+</tr>
+<tr>
+    <td><code>mode</code></td>
+    <td>Approach to receive updates, possible values are <code>ws</code> (WebServices), <code>rs</code> (REST Streaming), <code>full</code> (both <code>rs</code> and <code>ws</code>)</td>
+    <td><code>ws</code></td>
 </tr>
 <tr>
     <td><code>testInterval</code></td>
@@ -57,4 +60,4 @@ You can also use some additional arguments:
 
 Example:
 
-    $ node index.js --config path-to-config --testInterval 60 --checkInterval 500 --checkTimes 60
+    $ node index.js --config path-to-config --testInterval 60 --checkInterval 500 --checkTimes 60 --mode full

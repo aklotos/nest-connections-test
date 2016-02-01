@@ -1,11 +1,15 @@
 var fs = require('fs');
-var NestSyncWorker = require('./nest-sync-worker');
+var NestRSSyncWorker = require('./nest-rs-sync-worker').NestRSSyncWorker;
+var NestWSSyncWorker = require('./nest-ws-sync-worker').NestWSSyncWorker;
 var Firebase = require('firebase');
 var async = require('async');
 var _ = require('lodash');
 var nconf = require('nconf');
 
 nconf.argv({
+    "mode": {
+        default: "ws"
+    },
     "testInterval": {
         default: 60
     },
@@ -22,7 +26,8 @@ if (!nconf.get('config')) {
     return;
 }
 
-var workers = [];
+var rsWorkers = [];
+var wsWorkers = [];
 var firebaseRef, context, interval;
 
 async.auto({
@@ -36,30 +41,32 @@ async.auto({
         console.log('Starting nest sync workers');
 
         var config = results.readConfig;
-        async.each(config.userTokens, function (token, callback) {
-            var worker = new NestSyncWorker(token);
-            worker.on('stop', function () {
-                _.remove(workers, function(w) { return w.accessToken === token; });
-                worker.stop(function () {
-                    worker.start(function (err) {
-                        if (err) {
-                            console.err(err);
-                        } else {
-                            workers.push(worker);
-                        }
-                    });
-                });
-            });
+        var mode = nconf.get('mode');
 
-            worker.start(function (err) {
-                if (err) {
-                    console.err(err);
+        async.parallel([
+            function (callback) {
+                if (mode === 'rs') {
+                    callback();
                 } else {
-                    workers.push(worker);
+                    async.each(config.userTokens, function (token, callback) {
+                        startWorker(NestWSSyncWorker, token, wsWorkers, callback);
+                    }, function (err) {
+                        callback(err);
+                    });
                 }
-                callback(err);
-            });
-        }, function (err) {
+            },
+            function (callback) {
+                if (mode === 'ws') {
+                    callback()
+                } else {
+                    async.each(config.userTokens, function (token, callback) {
+                        startWorker(NestRSSyncWorker, token, rsWorkers, callback);
+                    }, function (err) {
+                        callback(err);
+                    });
+                }
+            }
+        ], function (err) {
             cb(err);
         });
     }],
@@ -70,7 +77,7 @@ async.auto({
         var config = results.readConfig;
 
         context = new Firebase.Context();
-        firebaseRef = new Firebase(config.firebaseUrl, context);
+        firebaseRef = new Firebase("wss://developer-api.nest.com", context);
 
         console.log('\n------ START TEST ------');
         interval = setInterval(function () {
@@ -86,26 +93,83 @@ async.auto({
     }
 });
 
+function startWorker(Worker, token, workers, callback) {
+    var worker = new Worker(token);
+    worker.on('stop', function () {
+        _.remove(workers, function (w) {
+            return w.accessToken === token;
+        });
+        worker.stop(function () {
+            worker.start(function (err) {
+                if (!err) {
+                    workers.push(worker);
+                }
+            });
+        });
+    });
+
+    worker.start(function (err) {
+        if (!err) {
+            workers.push(worker);
+        }
+        callback(err);
+    });
+}
+
 function updateAndCheck(token) {
     async.auto({
         update: function (cb) {
             updateThermostat(token, cb);
         },
-        receive: ['update', function (cb, results) {
+        receiveWS: ['update', function (cb, results) {
+            if (nconf.get('mode') === 'rs') {
+                return cb();
+            }
+
             var thermostat = results.update;
-            async.map(workers, function (worker, callback) {
-                receiveUpdate(worker, thermostat, 'target_temperature_f', function(err, updated) {
-                    callback(null, updated ? null : worker);
+            async.map(wsWorkers, function (worker, callback) {
+                receiveUpdate(worker, thermostat, 'target_temperature_f', function(err, updated, time) {
+                    callback(null, {worker: updated ? null : worker, time: time});
                 });
             }, function (err, results) {
                 if (err) {
                     throw err;
                 }
-                cb (null, results);
-            })
+                cb(null, results);
+            });
         }],
-        check: ['receive', function(cb, results) {
-            checkReceived(results.receive);
+        receiveRS: ['update', function(cb, results) {
+            if (nconf.get('mode') === 'ws') {
+                return cb();
+            }
+
+            var thermostat = results.update;
+            async.map(rsWorkers, function (worker, callback) {
+                receiveUpdate(worker, thermostat, 'target_temperature_f', function(err, updated, time) {
+                    callback(null, {worker: updated ? null : worker, time: time});
+                });
+            }, function (err, results) {
+                if (err) {
+                    throw err;
+                }
+                cb(null, results);
+            });
+        }],
+        checkWS: ['receiveWS', function(cb, results) {
+            if (nconf.get('mode') === 'rs') {
+                return cb();
+            }
+
+            checkReceived(results.receiveWS, wsWorkers.length, '[ WS ]');
+            cb();
+        }],
+        checkRS: ['receiveRS', function(cb, results) {
+            if (nconf.get('mode') === 'ws') {
+                return cb();
+            }
+
+            checkReceived(results.receiveRS, rsWorkers.length, '[REST]');
+            cb();
         }]
     }, function (err) {
         if (err) {
@@ -114,15 +178,16 @@ function updateAndCheck(token) {
     });
 }
 
-function checkReceived(results) {
-    var lost = _.without(results, null);
+function checkReceived(results, total, prefix) {
+    var lost = _.filter(results, function(r) {return r.worker});
+    var elapsedTime = _.max(_.map(results, function(w) {return w.time;}));
     if (lost && lost.length > 0) {
-        console.error('TEST FAILED [total - %d, received - %d, lost - %d]', workers.length, workers.length - lost.length, lost.length);
-        console.error('Lost updates for nest firebase clients: ', lost.map(function (l) {
-            return l.accessToken
+        console.error('%s TEST FAILED [total - %d, received - %d, lost - %d]', prefix, total, total - lost.length, lost.length);
+        console.error('%s Lost updates for nest firebase clients: ', prefix, lost.map(function (l) {
+            return l.worker.accessToken;
         }));
     } else {
-        console.log('TEST PASSED [all updates - %d, received - %d, lost - %d]', workers.length, workers.length - lost.length, lost.length);
+        console.log('%s TEST PASSED [all updates - %d, received - %d, lost - %d, time - %s ms]', prefix, total, total - lost.length, lost.length, elapsedTime);
     }
 }
 
@@ -135,7 +200,7 @@ function updateThermostat(token, cb) {
             if (err || !authData) {
                 cb(new Error('Failed to auth to Nest'));
             } else {
-                console.log('Authenticated master token: %s', token);
+                console.log('Authenticated master client [accessToken = %s]', token);
                 updateOnceValue(cb);
             }
         });
@@ -170,10 +235,9 @@ function updateOnceValue(cb) {
     });
 }
 
-
-
 function receiveUpdate(worker, update, property, callback) {
     var retryOpts = {times: nconf.get('checkTimes'), interval: nconf.get('checkInterval')};
+    var start = process.hrtime();
     async.retry(retryOpts, function (cb) {
         if (worker.lastUpdate['thermostat'] && _.isEqual(worker.lastUpdate['thermostat'][property], update[property])) {
             cb(null);
@@ -181,7 +245,8 @@ function receiveUpdate(worker, update, property, callback) {
             cb(new Error('Update not received'));
         }
     }, function (err) {
-        return callback(null, !err);
+        var elapsedMillis = (process.hrtime(start)[0] * 1000 + process.hrtime(start)[1] / 1000000).toFixed(0);
+        return callback(null, !err, elapsedMillis);
     });
 }
 
@@ -208,8 +273,16 @@ function shutdown() {
 
     clearInterval(interval);
 
-    if (!_.isEmpty(workers)) {
-        workers.forEach(function (worker) {
+    if (!_.isEmpty(wsWorkers)) {
+        wsWorkers.forEach(function (worker) {
+            worker.removeAllListeners('stop');
+            worker.stop(function () {
+            });
+        })
+    }
+
+    if (!_.isEmpty(rsWorkers)) {
+        rsWorkers.forEach(function (worker) {
             worker.removeAllListeners('stop');
             worker.stop(function () {
             });

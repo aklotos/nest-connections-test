@@ -35,13 +35,13 @@ NestSyncWorker.prototype.start = function (callback) {
 
     this.context = new Firebase.Context();
     this.firebase = new Firebase('wss://developer-api.nest.com', this.context);
-    console.log('Nest firebase client starts [%s]', this.accessToken);
+    console.log('[ WS ] Nest firebase client starts [accessToken = %s]', this._token());
 
     //Set up Firebase client
     this.firebase.authWithCustomToken(this.accessToken, function (error, authData) {
         if (error) {
             if (error.code === 'UNAUTHORIZED') {
-                console.error('Current token [%s] is not valid: ', that.accessToken, error);
+                console.error("[ WS ] Client wasn't authorized [accessToken = %s]: ", that._token(), error);
             }
             callback(error);
         } else {
@@ -56,7 +56,7 @@ NestSyncWorker.prototype.start = function (callback) {
 
 NestSyncWorker.prototype._onAuthComplete = function (onAuthData) {
     if (!onAuthData) {
-        console.log('Nest firebase client [%s] disconnected', this.accessToken);
+        console.log('[ WS ] Nest firebase client [accessToken = %s] disconnected', this._token());
         this.emit('stop');
     }
 }
@@ -71,7 +71,7 @@ NestSyncWorker.prototype._bootstrapSubscriptions = function (callback) {
     this.firebase.once('value', function (snapshot) {
         var dataModel = snapshot.val();
         if (!dataModel) {
-            callback(new Error('No data loaded from the root of the Firebase connection'));
+            callback(new Error('[ WS ] No data loaded from the root of the Firebase connection'));
         } else {
             that._subscribeEntities('/structures', 'structure_id', 'structure');
             that._subscribeEntities('/devices/thermostats', 'device_id', 'thermostat');
@@ -85,13 +85,13 @@ NestSyncWorker.prototype._subscribeEntities = function (path, idProp, updateEnti
     var ref = this.firebase.child(path);
     var that = this;
 
-    console.log('Listen to new/removed children [topic = %s, client = %s]', path, this.accessToken);
+    console.log('[ WS ] Listen to new/removed children [topic = %s, accessToken = %s]', path, this._token());
 
     that._saveChild(ref);
     ref.on('child_added', function (snapshot) {
         var childAdded = snapshot.val();
         if (!childAdded) {
-            console.log('No data on "child_added" event.');
+            console.log('[ WS ] No data on "child_added" event.');
             return;
         }
 
@@ -103,7 +103,7 @@ NestSyncWorker.prototype._subscribeEntities = function (path, idProp, updateEnti
     ref.on('child_removed', function (snapshot) {
         var childRemoved = snapshot.val();
         if (!childRemoved) {
-            console.log('No data on "child_removed" event.');
+            console.log('[ WS ] No data on "child_removed" event.');
             return;
         }
 
@@ -120,7 +120,7 @@ NestSyncWorker.prototype._subscribeEntity = function (path, updateEntity) {
     ref.on('value', function (snapshot) {
         var nestStateUpdate = snapshot.val();
         if (!nestStateUpdate) {
-            console.log('No data on "value" event');
+            console.log('[ WS ] No data on "value" event');
             return;
         }
 
@@ -129,10 +129,9 @@ NestSyncWorker.prototype._subscribeEntity = function (path, updateEntity) {
 }
 
 NestSyncWorker.prototype.stop = function (callback) {
-    console.log('Stop nest firebase client [%s]', this.accessToken);
+    console.log('[ WS ] Stop nest firebase client [accessToken = %s]', this._token());
 
     _.values(this.childs).forEach(function (ref) {
-        console.log(ref.toString());
         ref.off();
     });
     this.context.interrupt();
@@ -142,6 +141,10 @@ NestSyncWorker.prototype.stop = function (callback) {
     async.nextTick(callback);
 }
 
+NestSyncWorker.prototype._token = function() {
+    return util.format('%s...%s', this.accessToken.substr(0, 5), this.accessToken.substr(this.accessToken.length - 5, 5));
+}
+
 // === exports ============================================================= //
 
-module.exports = NestSyncWorker;
+module.exports.NestWSSyncWorker = NestSyncWorker;
