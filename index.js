@@ -179,8 +179,8 @@ function updateAndCheck(token) {
 }
 
 function checkReceived(results, total, prefix) {
-    var lost = _.filter(results, function(r) {return r.worker});
-    var elapsedTime = _.max(_.map(results, function(w) {return w.time;}));
+    var lost = _.filter(results, r => r.worker);
+    var elapsedTime = _.max(_.map(results, w => w.time));
     if (lost && lost.length > 0) {
         console.error('%s TEST FAILED [total - %d, received - %d, lost - %d]', prefix, total, total - lost.length, lost.length);
         console.error('%s Lost updates for nest firebase clients: ', prefix, lost.map(function (l) {
